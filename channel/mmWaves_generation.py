@@ -15,6 +15,7 @@ O. E. Ayach, S. Rajagopal, S. Abu-Surra, Z. Pi and R. W. Heath, "Spatially Spars
 Systems," in IEEE Transactions on Wireless Communications, vol. 13, no. 3, pp. 1499-1513, March 2014.
 """
 
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 import multiprocessing as mp
@@ -48,7 +49,7 @@ class MmWaveChan:
         RxElevationMaxAngle
         RxElevationMinAngle
         RxElevationAngleSubPathStd
-        d
+        Dis
 
     Examples:
         C = MmWaveChan(
@@ -89,7 +90,7 @@ class MmWaveChan:
                  RxElevationMaxAngle=PI / 2,
                  RxElevationMinAngle=-PI / 2,
                  RxElevationAngleSubPathStd=PI / 32,
-                 dis=100,
+                 Dis=100,
                  ):
         self.ChannelType = ChannelType  # channel model: "Saleh-Valenzuela"
         self.CarrierFrequency = CarrierFrequency  # carrier frequency in Hz
@@ -132,7 +133,7 @@ class MmWaveChan:
         self.nRx = self.RxNumberOfAntennas  # number of transmit antennas same as RxNumberOfAntennas
 
         # distance
-        self.dis = dis
+        self.Dis = Dis
 
     def channel_generate(self):
         # generate random angles for AoD (uniform distribution)
@@ -187,7 +188,7 @@ class MmWaveChan:
             print("Error: ", repr(e))
         H = gamma * H
 
-        # initialize channel info
+        # initialize channel info (angles, gain, and channel)
         keys = ["txPhiSubPath", "txThetaSubPath", "rxPhiSubPath", "rxThetaSubPath", "alpha", "H"]
         values = [txPhiSubPath, txThetaSubPath, rxPhiSubPath, rxThetaSubPath, alpha, H]
         P = dict(zip(keys, values))
@@ -225,7 +226,7 @@ class MmWaveChan:
         var_b = 2
         xi = 5.8
         var_xi = xi * np.random.randn()
-        pl_los = var_a + 10 * var_b * np.log10(self.dis) + var_xi
+        pl_los = var_a + 10 * var_b * np.log10(self.Dis) + var_xi
         pl_los = np.sqrt(np.power(10, -0.1 * pl_los))
         return pl_los
 
@@ -235,19 +236,18 @@ class MmWaveChan:
         var_b = 2.92
         xi = 8.7
         var_xi = xi * np.random.randn()
-        pl_nlos = var_a + 10 * var_b * np.log10(self.dis) + var_xi
+        pl_nlos = var_a + 10 * var_b * np.log10(self.Dis) + var_xi
         pl_nlos = np.sqrt(np.power(10, -0.1 * pl_nlos))
         return pl_nlos
 
     def get_info(self):
-        print("The properties of mmWaveChan_Generate_clas: ")
-        print('\n'.join(('{}: {}'.format(key, value) for key, value in self.__dict__.items())))
+        print("The attributes of MmWaveChan: ")
+        print('\n'.join(("{}: {}".format(key, value) for key, value in self.__dict__.items())))
 
     def chann_plot(self, P):
         plt.figure()
         plt.subplot(2, 2, 1)
         for n in range(self.NumberOfMainPaths):
-            # for transmitter
             plt.plot(np.cos(P['txPhiSubPath'][n, :]), np.sin(P['txPhiSubPath'][n, :]), 'o')
             plt.plot(np.cos(P['rxPhiSubPath'][n, :]), np.sin(P['rxPhiSubPath'][n, :]), 'x')
         x = np.linspace(-1, 1, 100)
@@ -260,7 +260,6 @@ class MmWaveChan:
 
         plt.subplot(2, 2, 2)
         for n in range(self.NumberOfMainPaths):
-            # for receiver
             plt.plot(np.cos(P['txThetaSubPath'][n, :]), np.sin(P['txThetaSubPath'][n, :]), 'o')
             plt.plot(np.cos(P['rxThetaSubPath'][n, :]), np.sin(P['rxThetaSubPath'][n, :]), 'x')
         x = np.linspace(-1, 1, 100)
@@ -292,10 +291,39 @@ class MmWaveChan:
         plt.show()
 
 
+# For Batch Generation Channel
+def batch_gen_chan(dis):
+    """
+    Args:
+        dis: distance
+
+    Returns:
+        channel
+    """
+    print("The child process id: %s" % (os.getpid()))
+    h_arr = []
+    for j, d in enumerate(dis):
+        Chan = MmWaveChan(
+            CarrierFrequency=28e9,
+            NumberOfMainPaths=1,
+            NumberOfSubPathsPerMainPath=4,
+            TxNumberOfAntennasInEachRows=1,
+            TxNumberOfAntennasInEachColumns=64,
+            RxNumberOfAntennasInEachRows=1,
+            RxNumberOfAntennasInEachColumns=1,
+            Dis=d,
+        )
+        ch, _ = Chan.channel_generate()
+        h_arr.append(ch)
+    return h_arr
+
+
 if __name__ == "__main__":
+
+    # Generate once
     Channel = MmWaveChan(
         CarrierFrequency=28e9,
-        NumberOfMainPaths=1,
+        NumberOfMainPaths=4,
         NumberOfSubPathsPerMainPath=4,
         TxNumberOfAntennasInEachRows=4,
         TxNumberOfAntennasInEachColumns=4,
@@ -305,4 +333,21 @@ if __name__ == "__main__":
     Channel.get_info()
     H1, P1 = Channel.channel_generate()
     Channel.chann_plot(P1)
-    print(H1)
+    print(H1.shape)
+
+    # Batch generate
+    print("=================@Copyright Bo Yin=================")
+    print("The main process id: %s" % (os.getpid()))
+    h = []
+    distance = 100 * np.random.rand(1, 100)
+    Iter_chan = len(distance)
+    pool = mp.Pool(processes=mp.cpu_count())
+    for _ in range(Iter_chan):
+        res = pool.apply_async(func=batch_gen_chan, args=(distance,))
+        h.append(res)
+    pool.close()
+    pool.join()
+    pool.terminate()
+    # save once
+    np.save("H.npy", np.array([h_ind.get() for h_ind in h]))
+    print("=================Finished=================")
